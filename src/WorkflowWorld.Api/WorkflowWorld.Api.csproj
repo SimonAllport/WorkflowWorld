@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <RootNamespace>WorkflowWorld.Api</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- OWIN self-host + Web API 2 -->
+    <PackageReference Include="Microsoft.AspNet.WebApi.OwinSelfHost" Version="5.3.0" />
+    <!-- SignalR 2 -->
+    <PackageReference Include="Microsoft.AspNet.SignalR.SelfHost" Version="2.4.3" />
+    <!-- OWIN middleware -->
+    <PackageReference Include="Microsoft.Owin.Cors" Version="4.2.2" />
+    <PackageReference Include="Microsoft.Owin.StaticFiles" Version="4.2.2" />
+    <!-- Configuration & DI (netstandard2.0 compatible) -->
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- K2 SDK assemblies (.NET Framework) -->
+    <Reference Include="SourceCode.Workflow.Management">
+      <HintPath>..\..\lib\SourceCode.Workflow.Management.dll</HintPath>
+    </Reference>
+    <Reference Include="SourceCode.HostClientAPI">
+      <HintPath>..\..\lib\SourceCode.HostClientAPI.dll</HintPath>
+    </Reference>
+    <Reference Include="SourceCode.Workflow">
+      <HintPath>..\..\lib\SourceCode.Workflow.dll</HintPath>
+    </Reference>
+    <Reference Include="SourceCode.ManagementAPI">
+      <HintPath>..\..\lib\SourceCode.ManagementAPI.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

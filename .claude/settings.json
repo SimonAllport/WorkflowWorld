@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s http://localhost:9090/api/workflows)",
+      "Bash(tasklist)",
+      "Bash(npm install:*)",
+      "Bash(npm uninstall:*)",
+      "Bash(npm run:*)",
+      "Bash(python3 -c \"import json,sys; data=json.load\\(sys.stdin\\); ids=[w[''''Id''''] for w in data]; dupes=[i for i in ids if ids.count\\(i\\)>1]; print\\(f''''{len\\(data\\)} workflows, {len\\(set\\(dupes\\)\\)} duplicate IDs''''\\); [print\\(d\\) for d in set\\(dupes\\)]\")",
+      "Bash(curl -s \"http://localhost:9090/api/workflows/3d-print-3dp-app-wkf-3dprint\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d, indent=2\\)\\)\")",
+      "Bash(taskkill //F //IM WorkflowWorld.Api.exe)",
+      "Bash(python3 -c \":*)",
+      "Bash(curl -s \"http://localhost:9090/api/workflows/3d-print-3dp-app-wkf-3dprint/instances\")",
+      "Bash(taskkill //F //PID 20052 //PID 17308)",
+      "Bash(curl -s http://localhost:5173/)",
+      "Bash(powershell -Command \":*)",
+      "Bash(npx tsc:*)"
+    ]
+  }
+}

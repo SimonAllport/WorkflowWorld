@@ -1,0 +1,27 @@
+# .NET
+bin/
+obj/
+publish/
+*.user
+*.suo
+*.vs/
+
+# Node
+node_modules/
+dist/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Environment
+.env
+*.log
+
+# K2 SDK DLLs (obtain from K2 server installation)
+lib/*.dll
+.claude/settings.local.json
