@@ -26,6 +26,7 @@ namespace WorkflowWorld.Api.Services
 
         private readonly Dictionary<string, Dictionary<string, WorkflowInstance>> _previousInstances = new();
         private readonly Dictionary<string, List<BottleneckInfo>> _previousBottlenecks = new();
+        private readonly Dictionary<string, List<ZoneStats>> _previousZoneStats = new();
 
         public WorkflowPollingService(
             IServiceProvider services,
@@ -121,8 +122,16 @@ namespace WorkflowWorld.Api.Services
                         clients.AllInstances(currentInstances);
                     }
 
-                    Console.WriteLine($"[Poll] {wf.Id}: Sending ZoneStatsUpdated ({stats.ZoneStats.Count} zones)");
-                    clients.ZoneStatsUpdated(stats.ZoneStats);
+                    // Only send ZoneStats if any values actually changed
+                    var statsChanged = !_previousZoneStats.TryGetValue(wf.Id, out var prevStats)
+                        || prevStats.Count != stats.ZoneStats.Count
+                        || prevStats.Zip(stats.ZoneStats, (a, b) => a.Population != b.Population || a.AverageWaitSeconds != b.AverageWaitSeconds).Any(c => c);
+                    if (statsChanged)
+                    {
+                        Console.WriteLine($"[Poll] {wf.Id}: Sending ZoneStatsUpdated ({stats.ZoneStats.Count} zones)");
+                        clients.ZoneStatsUpdated(stats.ZoneStats);
+                        _previousZoneStats[wf.Id] = stats.ZoneStats;
+                    }
 
                     var prevBottleneckIds = _previousBottlenecks.ContainsKey(wf.Id)
                         ? new HashSet<string>(_previousBottlenecks[wf.Id].Select(b => b.ZoneId))

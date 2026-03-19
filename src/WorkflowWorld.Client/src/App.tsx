@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { getWorkflows, getWorkflow, getInstances, getStats, repairInstance, redirectInstance, goToActivity } from './services/workflowApi';
 import { useWorkflowHub } from './hooks/useWorkflowHub';
 import { computeIsoLayout, pointInDiamond, randomPositionInRoom, tileToScreen, screenToTile } from './iso/isoEngine';
@@ -575,11 +575,11 @@ function simulate(people: AnimPerson[], zones: ZoneDefinition[], dt: number, lay
         }
         // Check if BOTH taxi arrived at final waypoint AND person arrived at door
         const lastWp = p.taxiWaypoints[p.taxiWaypoints.length - 1];
-        const taxiAtDest = lastWp ? Math.sqrt((lastWp.x - p.taxiX) ** 2 + (lastWp.y - p.taxiY) ** 2) <= 8 : true;
+        const taxiAtDest = lastWp ? (lastWp.x - p.taxiX) ** 2 + (lastWp.y - p.taxiY) ** 2 <= 64 : true; // 8²
         const personDx = p.targetX - p.x;
         const personDy = p.targetY - p.y;
-        const personDist = Math.sqrt(personDx * personDx + personDy * personDy);
-        if (taxiAtDest && personDist <= 5) {
+        const personDistSq = personDx * personDx + personDy * personDy;
+        if (taxiAtDest && personDistSq <= 25) { // 5²
           p.taxiPhase = 'waving';
           p.taxiTimer = 0;
           p.state = 'idle';
@@ -786,7 +786,7 @@ function simulate(people: AnimPerson[], zones: ZoneDefinition[], dt: number, lay
       const neighbors = (byZone[p.zoneId] || []).filter(o => o.id !== p.id && (o.state === 'idle' || o.state === 'queuing' || o.state === 'chatting'));
       if (neighbors.length > 0 && Math.random() < 0.008 * dt) {
         const partner = neighbors[Math.floor(Math.random() * neighbors.length)];
-        if (Math.sqrt((partner.x - p.x) ** 2 + (partner.y - p.y) ** 2) < 50) {
+        if ((partner.x - p.x) ** 2 + (partner.y - p.y) ** 2 < 2500) { // 50²
           p.state = 'chatting'; p.chatPartner = partner.id; p.moveTimer = 100 + Math.random() * 200;
         }
       }
@@ -910,7 +910,7 @@ function simulate(people: AnimPerson[], zones: ZoneDefinition[], dt: number, lay
 
     // Anxious near error zone
     if (p.trait === 'anxious' && !p.emotion) {
-      if (errorZone && Math.sqrt((p.x - errorZone.x) ** 2 + (p.y - errorZone.y) ** 2) < 80 && Math.random() < 0.005 * dt) {
+      if (errorZone && (p.x - errorZone.x) ** 2 + (p.y - errorZone.y) ** 2 < 6400 && Math.random() < 0.005 * dt) { // 80²
         p.emotion = 'nervous'; p.emotionTimer = 60;
       }
     }
@@ -919,15 +919,17 @@ function simulate(people: AnimPerson[], zones: ZoneDefinition[], dt: number, lay
   });
 
   // Post-process: trigger nearby people waving when someone is in taxi waving phase
-  const wavers = result.filter(p => p.taxiActive && p.taxiPhase === 'waving' && p.taxiTimer < 5);
+  // Only check on the first frame of waving (taxiTimer === 0) to avoid O(n²) every frame
+  const wavers = result.filter(p => p.taxiActive && p.taxiPhase === 'waving' && p.taxiTimer === 0);
   if (wavers.length > 0) {
+    const distThresholdSq = 100 * 100; // squared distance, avoids Math.sqrt
     for (const waver of wavers) {
       for (const p of result) {
         if (p.id === waver.id || p.wavingBye || p.taxiActive) continue;
         const st = p.state as string;
         if (st === 'error' || st === 'completed') continue;
-        const dist = Math.sqrt((p.x - waver.x) ** 2 + (p.y - waver.y) ** 2);
-        if (dist < 100) { p.wavingBye = true; p.wavingByeTimer = 80; }
+        const dx = p.x - waver.x, dy = p.y - waver.y;
+        if (dx * dx + dy * dy < distThresholdSq) { p.wavingBye = true; p.wavingByeTimer = 80; }
       }
     }
   }
@@ -936,7 +938,7 @@ function simulate(people: AnimPerson[], zones: ZoneDefinition[], dt: number, lay
 }
 
 // ─── PersonSprite SVG ────────────────────────────────────────────────────
-function PersonSprite({ p, now, isSelected, showNames, onClick, onDragStart, onContextMenu }: {
+const PersonSprite = React.memo(function PersonSprite({ p, now, isSelected, showNames, onClick, onDragStart, onContextMenu }: {
   p: AnimPerson; now: number; isSelected: boolean; showNames: boolean; onClick: () => void; onDragStart?: () => void; onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   const { x, y, skin, shirt, state, name, angle, walkCycle, trait, idleAnim, emotion, emotionTimer } = p;
@@ -1435,7 +1437,7 @@ function PersonSprite({ p, now, isSelected, showNames, onClick, onDragStart, onC
       })()}
     </g>
   );
-}
+});
 
 // ─── Timeline Chart ──────────────────────────────────────────────────────
 function Timeline({ history, zones, width: cw }: { history: Record<string, number>[]; zones: ZoneDefinition[]; width: number }) {
@@ -1603,6 +1605,7 @@ export default function App() {
     (async () => {
       try {
         const wfs = await getWorkflows();
+        wfs.sort((a, b) => a.name.localeCompare(b.name));
         setWorkflows(wfs);
         const active = wfs.filter(w => w.activeInstanceCount > 0);
         if (active.length > 0) setActiveWfId(active[0].id);

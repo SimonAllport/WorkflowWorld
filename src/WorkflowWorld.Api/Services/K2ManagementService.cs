@@ -20,8 +20,13 @@ namespace WorkflowWorld.Api.Services
         // Cache for workflow definitions (rarely changes)
         private static List<WorkflowDefinition>? _definitionsCache;
         private static DateTime _definitionsCacheTime = DateTime.MinValue;
-        private static readonly TimeSpan DefinitionsCacheDuration = TimeSpan.FromMinutes(5);
+        private static readonly TimeSpan DefinitionsCacheDuration = TimeSpan.FromMinutes(30);
         private static readonly object _cacheLock = new();
+
+        // Cache for error profiles (rarely changes)
+        private static List<int>? _errorProfileIdsCache;
+        private static DateTime _errorProfilesCacheTime = DateTime.MinValue;
+        private static readonly TimeSpan ErrorProfilesCacheDuration = TimeSpan.FromMinutes(10);
 
         private static readonly string[] SkinColors = { "#FDDCB5", "#F5C69E", "#E8A872", "#C68642", "#8D5524", "#6B3A1F" };
         private static readonly string[] ShirtColors = {
@@ -215,10 +220,12 @@ namespace WorkflowWorld.Api.Services
                                 try
                                 {
                                     var events = server.GetActivityEvents(act.ID);
+                                    var isIpc = false;
                                     foreach (Event evt in events)
                                     {
                                         if (evt.EventType == EventTypes.IPCEvent)
                                         {
+                                            isIpc = true;
                                             var actName = act.Name;
                                             if (!string.IsNullOrEmpty(actName))
                                             {
@@ -227,7 +234,7 @@ namespace WorkflowWorld.Api.Services
                                                 if (!string.IsNullOrEmpty(act.DisplayName) && !displayNameMap.ContainsKey(actName))
                                                     displayNameMap[actName] = act.DisplayName;
                                             }
-                                            break; // One IPC event is enough to classify this activity
+                                            break;
                                         }
                                     }
                                 }
@@ -425,7 +432,7 @@ namespace WorkflowWorld.Api.Services
                         var waitSeconds = (int)(DateTime.Now - proc.StartDate).TotalSeconds;
                         var state = MapInstanceState(proc.Status, waitSeconds);
 
-                        // Detect IPC-waiting instances: active (status "Active") but no worklist item
+                        // Detect IPC-waiting instances: no worklist item but active
                         var isWaitingOnIpc = false;
                         var zoneId = "entrance";
                         if (state == InstanceState.Error)
@@ -470,13 +477,20 @@ namespace WorkflowWorld.Api.Services
                         });
                     }
 
-                    // Get errored instances
+                    // Get errored instances (use cached error profile IDs)
                     try
                     {
-                        var errorProfiles = server.GetErrorProfiles();
-                        foreach (ErrorProfile ep in errorProfiles)
+                        if (_errorProfileIdsCache == null || DateTime.UtcNow - _errorProfilesCacheTime > ErrorProfilesCacheDuration)
                         {
-                            var errLogs = server.GetErrorLogs(ep.ID);
+                            var eps = server.GetErrorProfiles();
+                            _errorProfileIdsCache = new List<int>();
+                            foreach (ErrorProfile ep2 in eps)
+                                _errorProfileIdsCache.Add(ep2.ID);
+                            _errorProfilesCacheTime = DateTime.UtcNow;
+                        }
+                        foreach (var epId in _errorProfileIdsCache)
+                        {
+                            var errLogs = server.GetErrorLogs(epId);
                             foreach (ErrorLog error in errLogs)
                             {
                                 if (error.ProcessName != def.FullName) continue;

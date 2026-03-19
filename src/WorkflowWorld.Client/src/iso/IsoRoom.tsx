@@ -1,3 +1,4 @@
+import React from 'react';
 import { TILE_W, TILE_H, WALL_H, tileToScreen } from './isoEngine';
 import type { IsoRoom, IsoConnection, CorridorTile, DoorPosition } from './isoEngine';
 
@@ -360,7 +361,7 @@ export function CorridorPlant({ x, y }: { x: number; y: number }) {
 }
 
 // ─── Corridor floor tile (checkerboard pattern) ──────────────────────
-export function IsoCorridorTile({ tile }: { tile: CorridorTile }) {
+export const IsoCorridorTile = React.memo(function IsoCorridorTile({ tile }: { tile: CorridorTile }) {
   const hw = TILE_W / 2 * 0.45;
   const hh = TILE_H / 2 * 0.45;
   const { screenX: cx, screenY: cy } = tile;
@@ -372,7 +373,7 @@ export function IsoCorridorTile({ tile }: { tile: CorridorTile }) {
       <polygon points={pts} fill={isLight ? '#8A8A96' : '#7A7A86'} stroke="#6A6A76" strokeWidth="0.5" />
     </g>
   );
-}
+});
 
 // ─── Floor tiles with checkerboard pattern ───────────────────────────
 function FloorTiles({ room, floorColor, floorAltColor }: { room: IsoRoom; floorColor: string; floorAltColor: string }) {
@@ -399,7 +400,7 @@ function FloorTiles({ room, floorColor, floorAltColor }: { room: IsoRoom; floorC
 }
 
 // ─── Main room component ─────────────────────────────────────────────
-export default function IsoRoomComponent({ room, count, now, isHeatmap, isBottleneck, isDragOver, hasNearbyWalker }: IsoRoomProps) {
+const IsoRoomComponent = React.memo(function IsoRoomComponent({ room, count, now, isHeatmap, isBottleneck, isDragOver, hasNearbyWalker }: IsoRoomProps) {
   const colors = ZONE_COLORS[room.zone.type] || ZONE_COLORS.desk;
   const { top, right, bottom, left } = room.corners;
   const isBusy = room.zone.capacity > 0 && count > room.zone.capacity;
@@ -474,4 +475,6 @@ export default function IsoRoomComponent({ room, count, now, isHeatmap, isBottle
       )}
     </g>
   );
-}
+});
+
+export default IsoRoomComponent;
