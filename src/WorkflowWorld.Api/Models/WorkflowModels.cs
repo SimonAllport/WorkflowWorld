@@ -63,6 +63,9 @@ namespace WorkflowWorld.Api.Models
         // Available actions on the worklist item (e.g. Approve, Reject)
         public List<string> AvailableActions { get; set; } = new List<string>();
 
+        // Whether this instance is waiting on an IPC/subworkflow activity
+        public bool IsWaitingOnIPC { get; set; }
+
         // Character appearance (deterministic from instance ID)
         public string SkinColor { get; set; } = "#FDDCB5";
         public string ShirtColor { get; set; } = "#4A90D9";

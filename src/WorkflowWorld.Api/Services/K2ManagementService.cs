@@ -175,13 +175,17 @@ namespace WorkflowWorld.Api.Services
                     var activityNames = new HashSet<string>();
                     var displayNameMap = new Dictionary<string, string>(); // activityName → displayName
 
-                    // 1. Try GetProcessActivities (gives us DisplayName)
+                    var ipcActivityNames = new HashSet<string>();
+
+                    // 1. Try GetProcessActivities (gives us DisplayName) and detect IPC activities
+                    int procID = 0;
                     try
                     {
                         var processes = server.GetProcesses(def.VersionId);
                         if (processes.Count > 0)
                         {
                             var proc = processes[0];
+                            procID = proc.ProcID;
                             var userName = Environment.UserName;
                             var activities = server.GetProcessActivities(userName, proc.ProcID);
                             if (activities != null)
@@ -199,6 +203,42 @@ namespace WorkflowWorld.Api.Services
                         }
                     }
                     catch { }
+
+                    // 1b. Detect IPC/subworkflow activities via activity events
+                    if (procID > 0)
+                    {
+                        try
+                        {
+                            var procActivities = server.GetProcActivities(procID);
+                            foreach (Activity act in procActivities)
+                            {
+                                try
+                                {
+                                    var events = server.GetActivityEvents(act.ID);
+                                    foreach (Event evt in events)
+                                    {
+                                        if (evt.EventType == EventTypes.IPCEvent)
+                                        {
+                                            var actName = act.Name;
+                                            if (!string.IsNullOrEmpty(actName))
+                                            {
+                                                ipcActivityNames.Add(actName);
+                                                activityNames.Add(actName);
+                                                if (!string.IsNullOrEmpty(act.DisplayName) && !displayNameMap.ContainsKey(actName))
+                                                    displayNameMap[actName] = act.DisplayName;
+                                            }
+                                            break; // One IPC event is enough to classify this activity
+                                        }
+                                    }
+                                }
+                                catch { /* Skip if we can't read events for this activity */ }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogDebug(ex, "Could not detect IPC activities for workflow {Id}", workflowId);
+                        }
+                    }
 
                     // 2. Discover from worklist items
                     try
@@ -247,7 +287,7 @@ namespace WorkflowWorld.Api.Services
 
                     var instances = server.GetProcessInstancesAll(procFilter);
 
-                    def.Zones = LayoutActivitiesAsZones(activityNames.ToList(), def.FullName, displayNameMap);
+                    def.Zones = LayoutActivitiesAsZones(activityNames.ToList(), def.FullName, displayNameMap, ipcActivityNames.ToList());
                     def.Connections = InferConnections(def.Zones);
                     def.ActiveInstanceCount = instances.Count;
                 }
@@ -348,9 +388,10 @@ namespace WorkflowWorld.Api.Services
                     {
                         activityMap.TryGetValue(proc.ID, out var activityName);
 
-                        // Fallback: if worklist didn't have this instance (e.g., assigned to another user),
-                        // try to get current activity from management worklist items for all users
-                        if (string.IsNullOrEmpty(activityName))
+                        // Fallback: if worklist didn't have this instance and there's no teleporter zone,
+                        // try per-instance worklist query (skip if workflow has teleporter — IPC detection handles it)
+                        var hasTeleporter = def.Zones.Any(z => z.Type == "teleporter");
+                        if (string.IsNullOrEmpty(activityName) && !hasTeleporter)
                         {
                             try
                             {
@@ -365,7 +406,6 @@ namespace WorkflowWorld.Api.Services
                                     if (!string.IsNullOrEmpty(wlItem.ActivityName))
                                     {
                                         activityName = wlItem.ActivityName;
-                                        // Also capture destinations and actions
                                         if (!string.IsNullOrEmpty(wlItem.Destination))
                                         {
                                             if (!destinationMap.ContainsKey(proc.ID))
@@ -379,14 +419,34 @@ namespace WorkflowWorld.Api.Services
                                     }
                                 }
                             }
-                            catch { /* Fallback gracefully if per-instance query fails */ }
+                            catch { }
                         }
 
                         var waitSeconds = (int)(DateTime.Now - proc.StartDate).TotalSeconds;
                         var state = MapInstanceState(proc.Status, waitSeconds);
-                        var zoneId = state == InstanceState.Error
-                            ? "error-corner"
-                            : FindZoneForActivity(def.Zones, activityName);
+
+                        // Detect IPC-waiting instances: active (status "Active") but no worklist item
+                        var isWaitingOnIpc = false;
+                        var zoneId = "entrance";
+                        if (state == InstanceState.Error)
+                        {
+                            zoneId = "error-corner";
+                        }
+                        else if (string.IsNullOrEmpty(activityName) && state != InstanceState.Completed)
+                        {
+                            // No worklist item but active — likely waiting on IPC/subworkflow
+                            var teleporterZone = def.Zones.FirstOrDefault(z => z.Type == "teleporter");
+                            if (teleporterZone != null)
+                            {
+                                zoneId = teleporterZone.Id;
+                                activityName = teleporterZone.K2ActivityName;
+                                isWaitingOnIpc = true;
+                            }
+                        }
+                        else
+                        {
+                            zoneId = FindZoneForActivity(def.Zones, activityName);
+                        }
 
                         instances.Add(new WorkflowInstance
                         {
@@ -397,6 +457,7 @@ namespace WorkflowWorld.Api.Services
                             CurrentZoneId = zoneId,
                             CurrentActivityName = activityName ?? "Unknown",
                             State = state,
+                            IsWaitingOnIPC = isWaitingOnIpc,
                             Folio = proc.Folio ?? "",
                             Originator = proc.Originator ?? "",
                             StartDate = proc.StartDate,
@@ -637,7 +698,7 @@ namespace WorkflowWorld.Api.Services
 
         // ─── Layout Engine ───────────────────────────────────────────────────
 
-        private List<ZoneDefinition> LayoutActivitiesAsZones(List<string> activityNames, string workflowFullName, Dictionary<string, string>? displayNames = null)
+        private List<ZoneDefinition> LayoutActivitiesAsZones(List<string> activityNames, string workflowFullName, Dictionary<string, string>? displayNames = null, List<string>? ipcActivityNames = null)
         {
             var zones = new List<ZoneDefinition>();
             const double startX = 70;
@@ -655,12 +716,13 @@ namespace WorkflowWorld.Api.Services
             {
                 var friendlyName = displayNames != null && displayNames.TryGetValue(actName, out var dn) && !string.IsNullOrEmpty(dn)
                     ? dn : actName;
+                var isIpc = ipcActivityNames != null && ipcActivityNames.Contains(actName);
                 zones.Add(new ZoneDefinition
                 {
                     Id = SanitiseId(actName),
                     Label = TruncateLabel(friendlyName, 22),
-                    Type = GuessZoneType(actName),
-                    Emoji = GuessEmoji(actName),
+                    Type = isIpc ? "teleporter" : GuessZoneType(actName),
+                    Emoji = isIpc ? "🌀" : GuessEmoji(actName),
                     X = startX + col * spacingX,
                     Y = 140 + row * spacingY,
                     W = 140, H = 90,
@@ -691,7 +753,8 @@ namespace WorkflowWorld.Api.Services
         {
             var connections = new List<FlowConnection>();
             var actZones = zones.Where(z =>
-                z.Type != "door" && z.Type != "exit-good" && z.Type != "exit-bad" && z.Type != "error").ToList();
+                z.Type != "door" && z.Type != "exit-good" && z.Type != "exit-bad" && z.Type != "error" && z.Type != "teleporter").ToList();
+            var teleporterZones = zones.Where(z => z.Type == "teleporter").ToList();
             var entrance = zones.FirstOrDefault(z => z.Type == "door");
             var exit = zones.FirstOrDefault(z => z.Type == "exit-good");
             var error = zones.FirstOrDefault(z => z.Type == "error");
@@ -709,6 +772,19 @@ namespace WorkflowWorld.Api.Services
 
             if (exit != null && actZones.Count > 0)
                 connections.Add(new FlowConnection { From = actZones.Last().Id, To = exit.Id, Weight = 0.8 });
+
+            // Connect teleporter (IPC) zones: from preceding activity zones and to following ones
+            foreach (var tp in teleporterZones)
+            {
+                if (entrance != null)
+                    connections.Add(new FlowConnection { From = entrance.Id, To = tp.Id, Weight = 0.3 });
+                foreach (var az in actZones)
+                    connections.Add(new FlowConnection { From = az.Id, To = tp.Id, Weight = 0.2 });
+                if (exit != null)
+                    connections.Add(new FlowConnection { From = tp.Id, To = exit.Id, Weight = 0.5 });
+                if (error != null)
+                    connections.Add(new FlowConnection { From = tp.Id, To = error.Id, Weight = 0.1 });
+            }
 
             return connections;
         }

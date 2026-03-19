@@ -34,6 +34,7 @@ export type ZoneType =
   | "office"
   | "room"
   | "machine"
+  | "teleporter"
   | "exit-good"
   | "exit-bad"
   | "error";
@@ -60,6 +61,7 @@ export interface WorkflowInstance {
   errorMessage?: string;
   destinationUsers: string[];
   availableActions: string[];
+  isWaitingOnIPC?: boolean;
   skinColor: string;
   shirtColor: string;
   trait: PersonTrait;

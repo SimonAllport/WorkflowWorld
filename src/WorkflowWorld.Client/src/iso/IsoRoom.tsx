@@ -22,6 +22,7 @@ const ZONE_COLORS: Record<string, { floor: string; floorAlt: string; wallL: stri
   'exit-good':{ floor: '#C8E0C0', floorAlt: '#B8D0B0', wallL: '#68B060', wallR: '#58A050', wallTop: '#78C070', accent: '#489040' },
   'exit-bad': { floor: '#E0C8C0', floorAlt: '#D0B8B0', wallL: '#C07060', wallR: '#B06050', wallTop: '#D08070', accent: '#A05040' },
   error:      { floor: '#E8C0B8', floorAlt: '#D8B0A8', wallL: '#D06858', wallR: '#C05848', wallTop: '#E07868', accent: '#B04838' },
+  teleporter: { floor: '#1A1A2E', floorAlt: '#16163A', wallL: '#2A3050', wallR: '#222840', wallTop: '#3A4060', accent: '#4A5080' },
 };
 
 // ─── Furniture per zone type (bigger, warmer, more detailed) ─────────
@@ -157,6 +158,47 @@ function RoomFurniture({ room, now }: { room: IsoRoom; now: number }) {
       <line x1="-3" y1="4" x2="-4" y2="8" stroke="#6688AA" strokeWidth="0.8" opacity={0.3 + Math.sin(now / 300) * 0.3} />
       <line x1="1" y1="4" x2="0" y2="8" stroke="#6688AA" strokeWidth="0.8" opacity={0.3 + Math.sin(now / 300 + 1) * 0.3} />
       <line x1="5" y1="4" x2="4" y2="8" stroke="#6688AA" strokeWidth="0.8" opacity={0.3 + Math.sin(now / 300 + 2) * 0.3} />
+    </g>);
+  } else if (type === 'teleporter') {
+    // Transporter pad — concentric isometric rings on the floor
+    const padCx = cx, padCy = cy + 2;
+    items.push(<g key="pad">
+      {/* Outer ring */}
+      <ellipse cx={padCx} cy={padCy} rx={16} ry={8} fill="none" stroke="#4466CC" strokeWidth="1.5" opacity={0.5 + Math.sin(now / 400) * 0.2} />
+      {/* Mid ring */}
+      <ellipse cx={padCx} cy={padCy} rx={11} ry={5.5} fill="none" stroke="#6688EE" strokeWidth="1.2" opacity={0.6 + Math.sin(now / 350 + 1) * 0.2} />
+      {/* Inner ring */}
+      <ellipse cx={padCx} cy={padCy} rx={6} ry={3} fill="none" stroke="#88AAFF" strokeWidth="1" opacity={0.7 + Math.sin(now / 300 + 2) * 0.2} />
+      {/* Center glow */}
+      <ellipse cx={padCx} cy={padCy} rx={3} ry={1.5} fill="#88AAFF" opacity={0.3 + Math.sin(now / 250) * 0.15} />
+      {/* Pad surface glow */}
+      <ellipse cx={padCx} cy={padCy} rx={16} ry={8} fill="#4466CC" opacity={0.06 + Math.sin(now / 500) * 0.03} />
+    </g>);
+    // Shimmering particle beam — a few animated vertical lines and rising sparkles
+    items.push(<g key="beam" opacity={0.4 + Math.sin(now / 600) * 0.15}>
+      {/* Vertical energy lines */}
+      {[- 6, -2, 2, 6].map((dx, i) => (
+        <line key={`vl${i}`}
+          x1={padCx + dx} y1={padCy - 28 + Math.sin(now / 200 + i * 1.5) * 3}
+          x2={padCx + dx} y2={padCy - 2}
+          stroke="#7799FF" strokeWidth={0.8} opacity={0.2 + Math.sin(now / 250 + i * 2) * 0.15}
+          strokeDasharray="3,4" strokeDashoffset={-(now / 60 + i * 5) % 14} />
+      ))}
+      {/* Rising sparkle particles (6 total for performance) */}
+      {[0, 1, 2, 3, 4, 5].map(i => {
+        const phase = (now / 800 + i * 0.167) % 1; // 0→1 cycle per particle
+        const px = padCx + Math.sin(i * 2.3) * 8;
+        const py = padCy - phase * 30;
+        return <circle key={`sp${i}`} cx={px} cy={py} r={0.8 + Math.sin(now / 200 + i) * 0.4}
+          fill="#AACCFF" opacity={phase < 0.1 ? phase * 10 : phase > 0.85 ? (1 - phase) * 6.67 : 0.7} />;
+      })}
+    </g>);
+    // Console panel on the back wall
+    items.push(<g key="console" transform={`translate(${cx - 14}, ${cy - 10})`}>
+      <rect x="-4" y="-6" width="8" height="5" rx="1" fill="#1A2040" stroke="#3A4A6A" strokeWidth="0.6" />
+      <rect x="-3" y="-5" width="6" height="3" rx="0.5" fill="#2244AA" opacity="0.5" />
+      {/* Blinking indicator */}
+      <circle cx="5" cy="-4" r="1" fill={Math.sin(now / 350) > 0 ? '#44AAFF' : '#1A3366'} />
     </g>);
   } else if (type === 'error') {
     // Warning cones

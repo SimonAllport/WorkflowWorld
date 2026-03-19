@@ -85,6 +85,11 @@ interface AnimPerson {
   umbrellaActive: boolean;
   umbrellaY: number;       // current Y during float-down
   umbrellaTargetY: number; // target Y to land at
+  // Teleporter beam animation (IPC/subworkflow)
+  isWaitingOnIPC: boolean;
+  beamActive: boolean;          // beam-in effect is playing
+  beamPhase: 'beam-in' | 'waiting' | 'beam-out' | null;
+  beamTimer: number;            // counts progress through beam animation
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────
@@ -230,6 +235,10 @@ function instanceToPerson(inst: WorkflowInstance, zones: ZoneDefinition[], layou
     umbrellaActive: false,
     umbrellaY: 0,
     umbrellaTargetY: 0,
+    isWaitingOnIPC: inst.isWaitingOnIPC ?? false,
+    beamActive: false,
+    beamPhase: null,
+    beamTimer: 0,
   };
 }
 
@@ -422,10 +431,22 @@ function mergePersonWithInstance(existing: AnimPerson, inst: WorkflowInstance, w
       };
     }
   }
+  // Update isWaitingOnIPC — if the person is in a teleporter zone and IPC state changed
+  const isWaitingOnIPC = inst.isWaitingOnIPC ?? false;
+  const curZone = wf.zones.find(z => z.id === existing.zoneId);
+  // If IPC wait ended (was waiting, now not) in a teleporter zone → trigger beam-out
+  if (existing.isWaitingOnIPC && !isWaitingOnIPC && curZone?.type === 'teleporter' && !existing.beamActive) {
+    return {
+      ...existing, waitTimeSeconds: inst.waitTimeSeconds, errorMessage: inst.errorMessage,
+      destinationUsers: inst.destinationUsers || [], availableActions: inst.availableActions || [],
+      isWaitingOnIPC: false, beamActive: true, beamPhase: 'beam-out' as const, beamTimer: 0,
+    };
+  }
   // Just update metadata
   return {
     ...existing, waitTimeSeconds: inst.waitTimeSeconds, errorMessage: inst.errorMessage,
     destinationUsers: inst.destinationUsers || [], availableActions: inst.availableActions || [],
+    isWaitingOnIPC,
   };
 }
 
@@ -447,6 +468,39 @@ function simulate(people: AnimPerson[], zones: ZoneDefinition[], dt: number, lay
     p.moveTimer -= dt;
     if (p.emotionTimer > 0) p.emotionTimer -= dt;
     if (p.lastActionTimer > 0) p.lastActionTimer -= dt;
+
+    // Teleporter beam animation
+    if (p.beamActive && p.beamPhase) {
+      p.beamTimer += dt;
+      if (p.beamPhase === 'beam-in') {
+        // Beam-in lasts ~80 ticks: character dissolves upward into particles
+        if (p.beamTimer >= 80) {
+          // Beam-in complete → check if waiting on IPC (sync)
+          if (p.isWaitingOnIPC) {
+            p.beamPhase = 'waiting';
+            p.beamTimer = 0;
+          } else {
+            // Async/fire-and-forget: brief shimmer then beam-out
+            p.beamPhase = 'beam-out';
+            p.beamTimer = 0;
+          }
+        }
+      } else if (p.beamPhase === 'waiting') {
+        // Sync IPC: character stays in teleporter with shimmer effect
+        // Will transition to beam-out when isWaitingOnIPC becomes false (handled in merge)
+        p.moveTimer = 999; // don't wander
+      } else if (p.beamPhase === 'beam-out') {
+        // Beam-out lasts ~60 ticks: character materializes
+        if (p.beamTimer >= 60) {
+          p.beamActive = false;
+          p.beamPhase = null;
+          p.beamTimer = 0;
+          p.state = 'idle';
+          p.moveTimer = 60 + Math.random() * 120;
+        }
+      }
+      return p; // skip other movement during beam
+    }
 
     // Umbrella float-down animation
     if (p.umbrellaActive) {
@@ -793,8 +847,18 @@ function simulate(people: AnimPerson[], zones: ZoneDefinition[], dt: number, lay
           // Arrived at final position inside room
           p.walkPhase = null;
           p.walkDestZoneId = null;
-          p.state = 'idle';
-          p.moveTimer = 60 + Math.random() * 150;
+          // Check if arrived in a teleporter zone → trigger beam-in
+          const arrivalZone = zoneMap.get(p.zoneId);
+          if (arrivalZone?.type === 'teleporter') {
+            p.beamActive = true;
+            p.beamPhase = 'beam-in';
+            p.beamTimer = 0;
+            p.state = 'idle';
+            p.moveTimer = 999; // don't wander during beam
+          } else {
+            p.state = 'idle';
+            p.moveTimer = 60 + Math.random() * 150;
+          }
         } else {
           // Simple walk (no phases) — arrived, become idle
           const zone = zoneMap.get(p.zoneId);
@@ -812,7 +876,7 @@ function simulate(people: AnimPerson[], zones: ZoneDefinition[], dt: number, lay
       p.inCorridor = false;
       p.corridorActivity = null;
       const zone = zoneMap.get(p.zoneId);
-      if (zone && zone.type !== 'error' && zone.type !== 'exit-good' && zone.type !== 'exit-bad') {
+      if (zone && zone.type !== 'error' && zone.type !== 'exit-good' && zone.type !== 'exit-bad' && zone.type !== 'teleporter') {
         // Use room diamond for wander target to stay within walls
         const room = layout?.rooms.find(r => r.zone.id === p.zoneId);
         if (room) {
@@ -905,7 +969,11 @@ function PersonSprite({ p, now, isSelected, showNames, onClick, onDragStart, onC
       onClick={e => { e.stopPropagation(); onClick(); }}
       onMouseDown={e => { if (e.button === 0 && onDragStart) { e.preventDefault(); e.stopPropagation(); onDragStart(); } }}
       onContextMenu={e => { if (onContextMenu) { e.preventDefault(); e.stopPropagation(); onContextMenu(e); } }}
-      style={{ cursor: onDragStart ? 'grab' : 'pointer' }} opacity={p.exitOpacity}>
+      style={{ cursor: onDragStart ? 'grab' : 'pointer' }} opacity={p.exitOpacity * (
+        p.beamPhase === 'beam-in' ? Math.max(0.15, 1 - Math.min(1, p.beamTimer / 80)) :
+        p.beamPhase === 'beam-out' ? Math.max(0.15, Math.min(1, p.beamTimer / 60)) :
+        p.beamPhase === 'waiting' ? 0.4 + Math.sin(Date.now() / 300) * 0.15 : 1
+      )}>
       {isSelected && <circle cx="0" cy="0" r="26" fill="none" stroke="#FFD700" strokeWidth="2" strokeDasharray="5,3" opacity="0.8">
         <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="4s" repeatCount="indefinite" /></circle>}
       {/* Hide person body when inside ambulance */}
@@ -1221,6 +1289,58 @@ function PersonSprite({ p, now, isSelected, showNames, onClick, onDragStart, onC
           <line x1="8" y1="-2" x2="12" y2="2" stroke="rgba(255,255,255,0.15)" strokeWidth="0.5" />
         </g>
       )}
+
+      {/* Teleporter beam effect */}
+      {p.beamActive && p.beamPhase && (() => {
+        const isBeamIn = p.beamPhase === 'beam-in';
+        const isWaiting = p.beamPhase === 'waiting';
+        const isBeamOut = p.beamPhase === 'beam-out';
+        // Beam-in: character dissolves upward (opacity decreases, particles go up)
+        // Waiting: shimmering column of light
+        // Beam-out: character materializes (opacity increases)
+        const progress = isBeamIn ? Math.min(1, p.beamTimer / 80) :
+                         isBeamOut ? Math.min(1, p.beamTimer / 60) : 0;
+        const beamOpacity = isBeamIn ? 0.4 + (1 - progress) * 0.4 :
+                            isWaiting ? 0.5 + Math.sin(now / 300) * 0.2 :
+                            0.3 + progress * 0.4;
+        return (
+          <g>
+            {/* Vertical beam column */}
+            <rect x="-8" y="-50" width="16" height="70" rx="4"
+              fill="#4488FF" opacity={beamOpacity * 0.15} />
+            {/* Beam energy lines */}
+            {[-5, -1, 3, 7].map((dx, i) => (
+              <line key={`bl${i}`}
+                x1={dx} y1={-48 + Math.sin(now / 180 + i * 1.2) * 3}
+                x2={dx} y2={18}
+                stroke="#6699FF" strokeWidth={1}
+                opacity={beamOpacity * (0.2 + Math.sin(now / 200 + i * 1.5) * 0.1)}
+                strokeDasharray="4,5"
+                strokeDashoffset={isBeamIn ? (now / 40 + i * 3) % 18 : -(now / 40 + i * 3) % 18} />
+            ))}
+            {/* Rising/falling particles (8 for performance) */}
+            {[0, 1, 2, 3, 4, 5, 6, 7].map(i => {
+              const phase = (now / 600 + i * 0.125) % 1;
+              const px = -6 + Math.sin(i * 2.7 + now / 400) * 8;
+              const py = isBeamIn ? 15 - phase * 65 : -48 + phase * 65;
+              const sparkleSize = 0.6 + Math.sin(now / 150 + i) * 0.3;
+              return <circle key={`bp${i}`} cx={px} cy={py} r={sparkleSize}
+                fill={i % 2 === 0 ? '#AACCFF' : '#CC99FF'}
+                opacity={beamOpacity * (phase < 0.1 ? phase * 10 : phase > 0.85 ? (1 - phase) * 6.67 : 0.6)} />;
+            })}
+            {/* "Beaming..." speech bubble during sync wait */}
+            {isWaiting && (
+              <g transform="translate(0, -56)" opacity={0.7 + Math.sin(now / 500) * 0.2}>
+                <rect x="-26" y="-8" width="52" height="14" rx="4" fill="rgba(68,102,204,0.9)" />
+                <polygon points="-2,6 2,6 0,9" fill="rgba(68,102,204,0.9)" />
+                <text x="0" y="1" textAnchor="middle" fontSize="6.5" fill="white" fontWeight="700" fontFamily="monospace">
+                  Beaming{'.'.repeat(1 + Math.floor(now / 400) % 3)}
+                </text>
+              </g>
+            )}
+          </g>
+        );
+      })()}
 
       {/* Waving goodbye bubble */}
       {p.wavingBye && p.wavingByeTimer > 0 && (

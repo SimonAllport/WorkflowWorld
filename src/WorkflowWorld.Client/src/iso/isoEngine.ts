@@ -96,6 +96,7 @@ export function pointInDiamond(px: number, py: number, room: IsoRoom): boolean {
 // ─── Room size from zone type/capacity ──────────────────────────────────
 function getRoomSize(zone: ZoneDefinition): { w: number; h: number } {
   if (zone.type === 'door') return { w: 3, h: 3 };
+  if (zone.type === 'teleporter') return { w: 3, h: 3 };
   if (zone.type === 'error') return { w: 4, h: 3 };
   if (zone.type === 'exit-good' || zone.type === 'exit-bad') return { w: 3, h: 3 };
   const cap = zone.capacity || 5;
