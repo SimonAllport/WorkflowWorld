@@ -1548,7 +1548,7 @@ export default function App() {
 
   // ─── SignalR 2 real-time connection ────────────────────────────────
   const { connectionState: signalRState } = useWorkflowHub({
-    hubUrl: "http://localhost:9090",
+    hubUrl: import.meta.env.DEV ? "http://localhost:9090" : "",
     workflowId: activeWfId,
     onAllInstances: useCallback((instances: WorkflowInstance[]) => {
       const wf = activeWfRef.current;
