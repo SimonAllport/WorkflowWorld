@@ -12,23 +12,28 @@ namespace WorkflowWorld.Api.Hubs
     {
         private static readonly ConcurrentDictionary<string, HashSet<string>> _subscriptions = new();
 
-        public Task SubscribeToWorkflow(string workflowId)
+        public async Task SubscribeToWorkflow(string workflowId)
         {
             var groupName = $"workflow-{workflowId}";
-            Groups.Add(Context.ConnectionId, groupName);
+            await Groups.Add(Context.ConnectionId, groupName);
 
             _subscriptions.AddOrUpdate(
                 workflowId,
                 _ => new HashSet<string> { Context.ConnectionId },
                 (_, set) => { set.Add(Context.ConnectionId); return set; });
 
-            return Task.CompletedTask;
+            System.Console.WriteLine($"[WorkflowHub] {Context.ConnectionId} subscribed to {workflowId}. Subscribers: {(_subscriptions.TryGetValue(workflowId, out var s) ? s.Count : 0)}");
+
+            // Send immediate confirmation back to caller to verify transport works
+            Clients.Caller.Pong("subscribed:" + workflowId);
+            // Also try sending directly to this connection via All (bypasses groups)
+            Clients.Client(Context.ConnectionId).Pong("direct:" + workflowId);
         }
 
-        public Task UnsubscribeFromWorkflow(string workflowId)
+        public async Task UnsubscribeFromWorkflow(string workflowId)
         {
             var groupName = $"workflow-{workflowId}";
-            Groups.Remove(Context.ConnectionId, groupName);
+            await Groups.Remove(Context.ConnectionId, groupName);
 
             if (_subscriptions.TryGetValue(workflowId, out var set))
             {
@@ -36,12 +41,21 @@ namespace WorkflowWorld.Api.Hubs
                 if (set.Count == 0) _subscriptions.TryRemove(workflowId, out _);
             }
 
-            return Task.CompletedTask;
         }
 
         public static bool HasSubscribers(string workflowId)
         {
             return _subscriptions.TryGetValue(workflowId, out var set) && set.Count > 0;
+        }
+
+        /// <summary>
+        /// Get connection IDs subscribed to a workflow (for direct messaging instead of groups).
+        /// </summary>
+        public static IList<string> GetSubscriberConnectionIds(string workflowId)
+        {
+            if (_subscriptions.TryGetValue(workflowId, out var set))
+                return new List<string>(set);
+            return new List<string>();
         }
 
         public override Task OnDisconnected(bool stopCalled)

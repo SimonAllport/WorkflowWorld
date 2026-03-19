@@ -71,7 +71,9 @@ export function useWorkflowHub(options: UseWorkflowHubOptions) {
     (hubName: string, method: string, args: unknown[]) => {
       if (hubName.toLowerCase() !== "workflowhub") return;
       const cb = callbacksRef.current;
-      switch (method) {
+      // Normalize method name to handle both PascalCase and camelCase
+      const m = method.charAt(0).toUpperCase() + method.slice(1);
+      switch (m) {
         case "AllInstances":
           cb.onAllInstances?.(args[0] as WorkflowInstance[]);
           break;
@@ -153,9 +155,13 @@ export function useWorkflowHub(options: UseWorkflowHubOptions) {
 
         if (stopped) return;
 
+        // Handle both PascalCase and camelCase negotiate responses
+        const connToken = neg.ConnectionToken ?? neg.connectionToken;
+        const connId = neg.ConnectionId ?? neg.connectionId;
+
         const conn: SignalR2Connection = {
-          connectionId: neg.ConnectionId,
-          connectionToken: neg.ConnectionToken,
+          connectionId: connId,
+          connectionToken: connToken,
           state: "connecting",
           stop: () => {
             stopped = true;
@@ -168,7 +174,7 @@ export function useWorkflowHub(options: UseWorkflowHubOptions) {
         const connectResp = await fetch(
           buildUrl(`${hubUrl}/signalr`, "/connect", {
             transport: "longPolling",
-            connectionToken: neg.ConnectionToken,
+            connectionToken: connToken,
             connectionData,
             clientProtocol: PROTOCOL_VERSION,
           })
@@ -183,7 +189,7 @@ export function useWorkflowHub(options: UseWorkflowHubOptions) {
         const startResp = await fetch(
           buildUrl(`${hubUrl}/signalr`, "/start", {
             transport: "longPolling",
-            connectionToken: neg.ConnectionToken,
+            connectionToken: connToken,
             connectionData,
             clientProtocol: PROTOCOL_VERSION,
           })
@@ -205,7 +211,7 @@ export function useWorkflowHub(options: UseWorkflowHubOptions) {
             pollAbort = new AbortController();
             const params: Record<string, string> = {
               transport: "longPolling",
-              connectionToken: neg.ConnectionToken,
+              connectionToken: connToken,
               connectionData,
               clientProtocol: PROTOCOL_VERSION,
             };
@@ -223,13 +229,21 @@ export function useWorkflowHub(options: UseWorkflowHubOptions) {
             }
 
             const data = await pollResp.json();
+            console.log(`[WorkflowHub] Raw poll response:`, JSON.stringify(data).substring(0, 200));
             if (data.C) messageId = data.C;
 
             // Process messages
             if (data.M && Array.isArray(data.M)) {
+              if (data.M.length > 0) console.log(`[WorkflowHub] Received ${data.M.length} messages`);
               for (const msg of data.M) {
-                if (msg.H && msg.M && msg.A) {
-                  dispatchMessage(msg.H, msg.M, msg.A);
+                // Handle both PascalCase (H/M/A) and camelCase (h/m/a) protocol fields
+                const hub = msg.H ?? msg.h;
+                const method = msg.M ?? msg.m;
+                const args = msg.A ?? msg.a;
+                console.log(`[WorkflowHub] Message:`, JSON.stringify(msg).substring(0, 200));
+                if (hub && method && args) {
+                  console.log(`[WorkflowHub] Dispatch: ${method}`, args?.length > 0 ? `(${Array.isArray(args[0]) ? args[0].length + ' items' : typeof args[0]})` : '');
+                  dispatchMessage(hub, method, args);
                 }
               }
             }
@@ -246,7 +260,7 @@ export function useWorkflowHub(options: UseWorkflowHubOptions) {
           fetch(
             buildUrl(`${hubUrl}/signalr`, "/abort", {
               transport: "longPolling",
-              connectionToken: neg.ConnectionToken,
+              connectionToken: connToken,
               connectionData,
             }),
             { method: "POST" }
@@ -280,6 +294,7 @@ export function useWorkflowHub(options: UseWorkflowHubOptions) {
     }
 
     if (workflowId) {
+      console.log(`[WorkflowHub] Subscribing to workflow: ${workflowId}`);
       invokeHub("SubscribeToWorkflow", workflowId);
       currentWorkflowRef.current = workflowId;
     } else {

@@ -42,7 +42,14 @@ namespace WorkflowWorld.Api
             // Enable CORS
             app.UseCors(CorsOptions.AllowAll);
 
-            // Configure SignalR
+            // Configure SignalR with camelCase JSON to match frontend TypeScript types
+            var signalRSerializer = new Newtonsoft.Json.JsonSerializer
+            {
+                ContractResolver = new CamelCasePropertyNamesContractResolver()
+            };
+            signalRSerializer.Converters.Add(new StringEnumConverter { CamelCaseText = true });
+            GlobalHost.DependencyResolver.Register(typeof(Newtonsoft.Json.JsonSerializer), () => signalRSerializer);
+
             var hubConfig = new HubConfiguration
             {
                 EnableDetailedErrors = true,

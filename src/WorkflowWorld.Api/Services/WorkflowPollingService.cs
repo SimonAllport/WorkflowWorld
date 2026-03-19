@@ -64,30 +64,37 @@ namespace WorkflowWorld.Api.Services
 
             foreach (var wf in workflows)
             {
-                var groupName = $"workflow-{wf.Id}";
-
                 if (!WorkflowHub.HasSubscribers(wf.Id)) continue;
+
+                // Use direct connection IDs instead of SignalR groups
+                // (groups don't propagate from hub context in OWIN self-host)
+                var connectionIds = WorkflowHub.GetSubscriberConnectionIds(wf.Id);
+                if (connectionIds.Count == 0) continue;
 
                 try
                 {
                     var currentInstances = await k2Service.GetInstancesAsync(wf.Id);
                     var currentMap = currentInstances.ToDictionary(i => i.Id);
+                    Console.WriteLine($"[Poll] {wf.Id}: {currentInstances.Count} instances → {connectionIds.Count} clients");
 
                     // Use already-fetched instances to compute stats, avoiding redundant K2 calls
                     var stats = await k2Service.GetWorkflowStatsFromInstancesAsync(wf.Id, currentInstances);
+
+                    // Helper: send to all subscribers of this workflow
+                    dynamic clients = hubContext.Clients.Clients(connectionIds);
 
                     if (_previousInstances.TryGetValue(wf.Id, out var prevMap))
                     {
                         foreach (var kvp in currentMap)
                         {
                             if (!prevMap.ContainsKey(kvp.Key))
-                                hubContext.Clients.Group(groupName).InstanceCreated(kvp.Value);
+                                clients.InstanceCreated(kvp.Value);
                         }
 
                         foreach (var kvp in prevMap)
                         {
                             if (!currentMap.ContainsKey(kvp.Key))
-                                hubContext.Clients.Group(groupName).InstanceCompleted(kvp.Key);
+                                clients.InstanceCompleted(kvp.Key);
                         }
 
                         foreach (var kvp in currentMap)
@@ -97,23 +104,25 @@ namespace WorkflowWorld.Api.Services
                                 if (prev.CurrentZoneId != kvp.Value.CurrentZoneId ||
                                     prev.State != kvp.Value.State)
                                 {
-                                    hubContext.Clients.Group(groupName).InstanceUpdated(kvp.Value);
+                                    clients.InstanceUpdated(kvp.Value);
                                 }
 
                                 if (prev.State != InstanceState.Error &&
                                     kvp.Value.State == InstanceState.Error)
                                 {
-                                    hubContext.Clients.Group(groupName).InstanceErrored(kvp.Value);
+                                    clients.InstanceErrored(kvp.Value);
                                 }
                             }
                         }
                     }
                     else
                     {
-                        hubContext.Clients.Group(groupName).AllInstances(currentInstances);
+                        Console.WriteLine($"[Poll] {wf.Id}: First poll — sending AllInstances ({currentInstances.Count})");
+                        clients.AllInstances(currentInstances);
                     }
 
-                    hubContext.Clients.Group(groupName).ZoneStatsUpdated(stats.ZoneStats);
+                    Console.WriteLine($"[Poll] {wf.Id}: Sending ZoneStatsUpdated ({stats.ZoneStats.Count} zones)");
+                    clients.ZoneStatsUpdated(stats.ZoneStats);
 
                     var prevBottleneckIds = _previousBottlenecks.ContainsKey(wf.Id)
                         ? new HashSet<string>(_previousBottlenecks[wf.Id].Select(b => b.ZoneId))
@@ -122,7 +131,7 @@ namespace WorkflowWorld.Api.Services
 
                     foreach (var bn in stats.Bottlenecks.Where(b => !prevBottleneckIds.Contains(b.ZoneId)))
                     {
-                        hubContext.Clients.Group(groupName).BottleneckDetected(bn);
+                        clients.BottleneckDetected(bn);
                         _logger.LogWarning(
                             "Bottleneck detected: {Zone} in {Workflow} ({Pop}/{Cap})",
                             bn.ZoneLabel, wf.Name, bn.Population, bn.Capacity);
@@ -130,7 +139,7 @@ namespace WorkflowWorld.Api.Services
 
                     foreach (var zoneId in prevBottleneckIds.Except(currentBottleneckIds))
                     {
-                        hubContext.Clients.Group(groupName).BottleneckResolved(zoneId);
+                        clients.BottleneckResolved(zoneId);
                         _logger.LogInformation("Bottleneck resolved: {Zone} in {Workflow}", zoneId, wf.Name);
                     }
 

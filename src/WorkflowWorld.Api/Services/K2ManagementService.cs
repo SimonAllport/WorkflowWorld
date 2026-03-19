@@ -173,8 +173,9 @@ namespace WorkflowWorld.Api.Services
                 {
                     server = OpenConnection();
                     var activityNames = new HashSet<string>();
+                    var displayNameMap = new Dictionary<string, string>(); // activityName → displayName
 
-                    // 1. Try GetProcessActivities
+                    // 1. Try GetProcessActivities (gives us DisplayName)
                     try
                     {
                         var processes = server.GetProcesses(def.VersionId);
@@ -188,7 +189,11 @@ namespace WorkflowWorld.Api.Services
                                 foreach (Activity act in activities)
                                 {
                                     if (!string.IsNullOrEmpty(act.Name))
+                                    {
                                         activityNames.Add(act.Name);
+                                        if (!string.IsNullOrEmpty(act.DisplayName))
+                                            displayNameMap[act.Name] = act.DisplayName;
+                                    }
                                 }
                             }
                         }
@@ -208,7 +213,11 @@ namespace WorkflowWorld.Api.Services
                         foreach (WorklistItem item in worklistItems)
                         {
                             if (!string.IsNullOrEmpty(item.ActivityName))
+                            {
                                 activityNames.Add(item.ActivityName);
+                                if (!string.IsNullOrEmpty(item.ActivityDisplayName) && !displayNameMap.ContainsKey(item.ActivityName))
+                                    displayNameMap[item.ActivityName] = item.ActivityDisplayName;
+                            }
                         }
                     }
                     catch { }
@@ -238,7 +247,7 @@ namespace WorkflowWorld.Api.Services
 
                     var instances = server.GetProcessInstancesAll(procFilter);
 
-                    def.Zones = LayoutActivitiesAsZones(activityNames.ToList(), def.FullName);
+                    def.Zones = LayoutActivitiesAsZones(activityNames.ToList(), def.FullName, displayNameMap);
                     def.Connections = InferConnections(def.Zones);
                     def.ActiveInstanceCount = instances.Count;
                 }
@@ -338,6 +347,41 @@ namespace WorkflowWorld.Api.Services
                     foreach (ProcessInstance proc in processes)
                     {
                         activityMap.TryGetValue(proc.ID, out var activityName);
+
+                        // Fallback: if worklist didn't have this instance (e.g., assigned to another user),
+                        // try to get current activity from management worklist items for all users
+                        if (string.IsNullOrEmpty(activityName))
+                        {
+                            try
+                            {
+                                var instFilter = new WorklistCriteriaFilter();
+                                instFilter.AddRegularFilter(
+                                    (WorklistFields)12, // WorklistFields.ProcInstID
+                                    Comparison.Equals,
+                                    proc.ID);
+                                var instWorklistItems = server.GetWorklistItems(instFilter);
+                                foreach (WorklistItem wlItem in instWorklistItems)
+                                {
+                                    if (!string.IsNullOrEmpty(wlItem.ActivityName))
+                                    {
+                                        activityName = wlItem.ActivityName;
+                                        // Also capture destinations and actions
+                                        if (!string.IsNullOrEmpty(wlItem.Destination))
+                                        {
+                                            if (!destinationMap.ContainsKey(proc.ID))
+                                                destinationMap[proc.ID] = new List<string>();
+                                            var parts = wlItem.Destination.Split('\\');
+                                            var username = parts.Length > 1 ? parts[1] : wlItem.Destination;
+                                            if (!destinationMap[proc.ID].Contains(username))
+                                                destinationMap[proc.ID].Add(username);
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                            catch { /* Fallback gracefully if per-instance query fails */ }
+                        }
+
                         var waitSeconds = (int)(DateTime.Now - proc.StartDate).TotalSeconds;
                         var state = MapInstanceState(proc.Status, waitSeconds);
                         var zoneId = state == InstanceState.Error
@@ -593,7 +637,7 @@ namespace WorkflowWorld.Api.Services
 
         // ─── Layout Engine ───────────────────────────────────────────────────
 
-        private List<ZoneDefinition> LayoutActivitiesAsZones(List<string> activityNames, string workflowFullName)
+        private List<ZoneDefinition> LayoutActivitiesAsZones(List<string> activityNames, string workflowFullName, Dictionary<string, string>? displayNames = null)
         {
             var zones = new List<ZoneDefinition>();
             const double startX = 70;
@@ -609,10 +653,12 @@ namespace WorkflowWorld.Api.Services
             int col = 1, row = 0;
             foreach (var actName in activityNames.OrderBy(a => a))
             {
+                var friendlyName = displayNames != null && displayNames.TryGetValue(actName, out var dn) && !string.IsNullOrEmpty(dn)
+                    ? dn : actName;
                 zones.Add(new ZoneDefinition
                 {
                     Id = SanitiseId(actName),
-                    Label = TruncateLabel(actName, 18),
+                    Label = TruncateLabel(friendlyName, 22),
                     Type = GuessZoneType(actName),
                     Emoji = GuessEmoji(actName),
                     X = startX + col * spacingX,
